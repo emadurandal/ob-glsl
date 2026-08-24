@@ -1,73 +1,143 @@
-#+TITLE:     GLSL code blocks for Emacs Org-mode
+#+TITLE: GLSL code blocks for Emacs Org mode
 
-This org-mode extension adds the capability to run GLSL code blocks directly
-from inside Emacs and immediately displays the rendering results inline in your
-org-mode buffers.
+This Org Babel backend renders GLSL fragment shaders from Org source blocks.
+On Emacs 32, blocks without a ~:file~ header produce a live animated Canvas in
+the Org buffer. Blocks with ~:file~ render one frame to a PNG.
 
 * Requirements
-  - SDL2 (for creating OpenGL context)
-  - SDL2_image (for saving PNG files)
-  - glbinding (for OpenGL SDK)
 
-  The rendering is done with OpenGL 3.3 so should work on any graphcs card.
+  - Emacs 32 built with dynamic module and Canvas support
+  - SDL2, used to create a portable hidden OpenGL context
+  - SDL2_image, used to save PNG files
+  - glbinding
+  - An OpenGL 3.3 capable driver
+  - CMake 3.11 or newer and a C++17 compiler
+
+  The initial implementation targets desktop OpenGL on Windows, macOS, and
+  Linux. Context creation is isolated so an OpenGL ES/Android backend can be
+  added later without changing the Elisp API.
 
 * Building
-  1. Generate project with CMake:
-     #+begin_src sh
-     cmake -G "Ninja" .
-     #+end_src
 
-  2. Build the code:
-     #+begin_src sh
-     ninja
-     #+end_src
+  Configure CMake with the directory containing the Emacs 32
+  ~emacs-module.h~. For example:
 
-  This will create the Emacs dynamic module ~ob-glsl-module.so~ (Linux) or
-  ~ob-glsl-module.dll~ (Windows) or ~ob-glsl-module.dylib~ (MacOS).
+  #+begin_src sh
+  cmake -S . -B build -G Ninja -DEMACS_INCLUDE_DIR=/path/to/emacs/include
+  cmake --build build
+  #+end_src
+
+  On the Windows Emacs installation used during development, the first command
+  is:
+
+  #+begin_src powershell
+  cmake -S . -B build -G Ninja -DEMACS_INCLUDE_DIR=C:/Emacs/include
+  #+end_src
+
+  The build creates ~ob-glsl-module~ with the dynamic-module suffix used by the
+  platform.
 
 * Installing
-  1. Put both ~ob-glsl.el~ and the dynamic module under your elisp load path.
-  2. Add ~(glsl . t)~ to ~org-babel-load-languages~.  You can either customize
-     the variable or add it manually in lisp code.
 
-* Supported parameters
-  - ~:file~
-    The output file path (required)
-  - ~:width~
-    The render width in pixels
-  - ~:height~
-    The render height in pixels
+  1. Put ~ob-glsl.el~ and the built dynamic module on ~load-path~.
+  2. Ensure the SDL2, SDL2_image, and glbinding shared libraries can be found
+     by the operating system's dynamic loader.
+  3. Add ~(glsl . t)~ to ~org-babel-load-languages~.
 
-  You can omit either ~:width~ or ~:height~ and the omitted one will be
-  calculated based on the other parameter. If you omit both, then the default
-  output size is 400x300.
+* Header arguments
 
-* A simple pixel shader example
-#+BEGIN_SRC glsl :file img/mandel.png :width 600 :height 450
+  - ~:file PATH~
+    Render one frame to PATH as a PNG. When omitted, insert an animated Emacs
+    Canvas result.
+  - ~:width PIXELS~
+    Positive integer render width.
+  - ~:height PIXELS~
+    Positive integer render height.
+  - ~:time SECONDS~
+    Floating-point initial value of ~iTime~. It defaults to 0. For a file
+    result, the one frame is rendered at exactly this time. For a Canvas, time
+    continues advancing from this value.
+
+  If only one dimension is supplied, the other is calculated at a 4:3 aspect
+  ratio. The default size is 400 by 300.
+
+* Shader interface
+
+  ob-glsl prepends these declarations:
+
+  #+begin_src glsl
+  #version 330 core
+  out vec4 fragColor;
+  uniform vec2 iResolution;
+  uniform float iTime;
+  #+end_src
+
+  Source blocks provide the rest of the fragment shader, including ~main~.
+
+* Animated Canvas example
+
+  Executing this block inserts an animated 400 by 300 Canvas. Re-executing it
+  recompiles the shader and restarts ~iTime~. Timer frames only update uniforms
+  and render; they never recompile the program.
+
+  #+begin_src glsl :width 400 :height 300
+  void main() {
+      vec2 uv = gl_FragCoord.xy / iResolution;
+      float pulse = 0.5 + 0.5 * sin(iTime * 3.0);
+      fragColor = vec4(uv.x, uv.y, pulse, 1.0);
+  }
+  #+end_src
+
+  Use ~:time 10.0~ to begin the animation at ten seconds.
+
+* PNG example
+
+  #+begin_src glsl :file img/mandel.png :width 600 :height 450 :time 0
   vec3 mandel(vec2 z0) {
       float k = 0.0;
       vec2 z = vec2(0.0);
-      for(int i = 0; i < 420; ++i) {
+      for (int i = 0; i < 420; ++i) {
           z = vec2(z.x*z.x-z.y*z.y, z.x*z.y*2.0) + z0;
           if (length(z) > 20.0) break;
           k += 1.0;
       }
       float mu = k + 1.0 - log2(log(length(z)));
-      return sin(mu*0.1 + vec3(0.0,0.5,1.0));
+      return sin(mu*0.1 + vec3(0.0, 0.5, 1.0));
   }
+
   void main() {
       float ar = iResolution.x / iResolution.y;
       vec2 uv = gl_FragCoord.xy / iResolution.yy - vec2(0.66 * ar, 0.5);
-      // uv = uv * 2.0 + vec2(-0.3, 0.0);
-      float p = 30.0;
-      float t = mod(13.0, p);
-      if (t > p/2.0) t = p - t;
-      float scale = 0.5 + pow(2.0, t);
-      vec2 offset = vec2(-1.36799, .01);
-      uv += offset*scale;
+      float scale = 0.5;
+      vec2 offset = vec2(-0.3, 0.0);
+      uv += offset * scale;
       uv /= scale;
       fragColor = vec4(mandel(uv), 1.0);
   }
-#+END_SRC
+  #+end_src
 
-[[img/mandel.png]]
+* Animation and resource lifetime
+
+  Each Canvas result owns its shader program, framebuffer resources, two
+  asynchronous pixel-pack buffers, timer, and native renderer handle. The
+  timer targets 60 FPS and publishes a completed PBO without waiting on an
+  unfinished GPU fence. A single memory copy transfers the completed packed
+  ARGB32 frame into Emacs-owned Canvas memory.
+
+  Replacing or removing the result, killing its buffer, or encountering a
+  rendering error cancels the timer and destroys the native GL resources. A
+  native user-pointer finalizer is retained as a last-resort cleanup path.
+
+  Canvas results are intended for interactive use. Use ~:file~ when a durable
+  or exported image is required.
+
+* Testing
+
+  With the build directory and source directory on ~load-path~:
+
+  #+begin_src sh
+  emacs -Q --batch -L build -L . \
+    --load tests/ob-glsl-tests.el \
+    -f ert-run-tests-batch-and-exit
+  #+end_src
+

@@ -1,6 +1,9 @@
 #pragma once
 
-#include "emacs-module.h"
+#include <emacs-module.h>
+#if EMACS_MAJOR_VERSION < 32
+#error "ob-glsl Canvas support requires the Emacs 32 module API"
+#endif
 #include <string>
 #include <map>
 #include <tuple>
@@ -12,6 +15,8 @@ template<typename T>
 T extractArg(emacs_env *env, emacs_value v);
 template<> std::string extractArg<std::string>(emacs_env *env, emacs_value v);
 template<> int extractArg<int>(emacs_env *env, emacs_value v);
+template<> double extractArg<double>(emacs_env *env, emacs_value v);
+template<> emacs_value extractArg<emacs_value>(emacs_env *env, emacs_value v);
 
 template <typename...ARGS, std::size_t... I>
 auto extractArgsImpl(emacs_env *env, emacs_value* args, std::index_sequence<I...>) {
@@ -36,8 +41,8 @@ void bindFunction(emacs_env *env, emacs_value f(emacs_env*, ARGS...), const char
     auto numArgs = sizeof...(ARGS);
     auto trampoline = [] (emacs_env *env, ptrdiff_t nargs, emacs_value* args, void *data) noexcept {
         auto func = reinterpret_cast<decltype(f)>(data);
-        auto argsTuple = detail::extractArgs<ARGS...>(env, nargs, args);
         try {
+            auto argsTuple = detail::extractArgs<ARGS...>(env, nargs, args);
             return std::apply(func, std::tuple_cat(std::make_tuple(env), argsTuple));
         } catch (std::exception& e) {
             return reportError(env, e);

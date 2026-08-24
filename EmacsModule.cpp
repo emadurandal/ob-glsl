@@ -1,4 +1,5 @@
 #include "EmacsModule.hpp"
+#include <limits>
 
 namespace detail {
 
@@ -13,7 +14,21 @@ std::string extractArg<std::string>(emacs_env *env, emacs_value v) {
 
 template<>
 int extractArg<int>(emacs_env *env, emacs_value v) {
-    return env->extract_integer(env, v);
+    const intmax_t value = env->extract_integer(env, v);
+    if (value < std::numeric_limits<int>::min() ||
+        value > std::numeric_limits<int>::max())
+        throw std::runtime_error("integer argument is outside the supported range");
+    return static_cast<int>(value);
+}
+
+template<>
+double extractArg<double>(emacs_env *env, emacs_value v) {
+    return env->extract_float(env, v);
+}
+
+template<>
+emacs_value extractArg<emacs_value>(emacs_env *, emacs_value v) {
+    return v;
 }
 }
 

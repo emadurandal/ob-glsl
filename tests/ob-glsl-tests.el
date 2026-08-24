@@ -1,0 +1,131 @@
+;;; ob-glsl-tests.el --- Tests for ob-glsl -*- lexical-binding: t; -*-
+
+(require 'ert)
+(require 'org)
+(require 'ob-glsl)
+
+(setq org-confirm-babel-evaluate nil)
+
+(ert-deftest ob-glsl-expands-standard-uniforms ()
+  (let ((expanded (org-babel-expand-body:glsl
+                   "void main() { fragColor = vec4(1.0); }" nil)))
+    (should (string-match-p "uniform vec2 iResolution;" expanded))
+    (should (string-match-p "uniform float iTime;" expanded))))
+
+(ert-deftest ob-glsl-parses-dimensions-and-time ()
+  (should (equal (ob-glsl--dimensions nil) '(400 . 300)))
+  (should (equal (ob-glsl--dimensions '((:width . "640"))) '(640 . 480)))
+  (should (equal (ob-glsl--dimensions '((:height . "240"))) '(320 . 240)))
+  (should (= (ob-glsl--parse-time nil) 0.0))
+  (should (= (ob-glsl--parse-time "-1.25e1") -12.5))
+  (should-error (ob-glsl--parse-time "one") :type 'user-error))
+
+(ert-deftest ob-glsl-renders-a-file-at-configured-time ()
+  (let ((file (make-temp-file "ob-glsl-" nil ".png")))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (insert (format
+                   "#+begin_src glsl :file %s :width 8 :height 6 :time 0.5\n"
+                   (subst-char-in-string ?\\ ?/ file)))
+          (insert "void main() { fragColor = vec4(iTime, 0.0, 0.0, 1.0); }\n")
+          (insert "#+end_src\n")
+          (goto-char (point-min))
+          (should (equal (expand-file-name (org-babel-execute-src-block))
+                         (expand-file-name file)))
+          (should (file-exists-p file))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally file nil 0 8)
+            (should (equal (buffer-string) "\x89PNG\r\n\x1a\n"))))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
+(ert-deftest ob-glsl-installs-and-cleans-up-a-canvas-result ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_src glsl :width 8 :height 6 :time 2.0\n")
+    (insert "void main() { fragColor = vec4(iTime / 4.0, 0.0, 0.0, 1.0); }\n")
+    (insert "#+end_src\n")
+    (goto-char (point-min))
+    (org-babel-execute-src-block)
+    (should (= (length ob-glsl--active-states) 1))
+    (let* ((state (car ob-glsl--active-states))
+           (overlay (ob-glsl--state-overlay state)))
+      (should (overlay-buffer overlay))
+      (should (timerp (ob-glsl--state-timer state)))
+      (should (equal (overlay-get overlay 'display)
+                     (ob-glsl--state-canvas state)))
+      ;; First async call queues a PBO. The next call can publish it.
+      (ob-glsl--timer-tick state)
+      (sleep-for 0.02)
+      (ob-glsl--timer-tick state)
+      (goto-char (point-min))
+      (org-babel-remove-result)
+      (should-not ob-glsl--active-states)
+      (should-not (ob-glsl--state-renderer state))
+      (should-not (ob-glsl--state-timer state)))))
+
+(ert-deftest ob-glsl-keeps-the-old-canvas-after-a-compile-error ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_src glsl :width 8 :height 6\n")
+    (insert "void main() { fragColor = vec4(1.0); }\n")
+    (insert "#+end_src\n")
+    (goto-char (point-min))
+    (org-babel-execute-src-block)
+    (let ((old-state (car ob-glsl--active-states)))
+      (goto-char (point-min))
+      (forward-line 1)
+      (delete-region (line-beginning-position) (line-end-position))
+      (insert "this is not valid GLSL")
+      (goto-char (point-min))
+      (should-error (org-babel-execute-src-block))
+      (should (eq (car ob-glsl--active-states) old-state))
+      (should (ob-glsl--state-renderer old-state))
+      (should (timerp (ob-glsl--state-timer old-state))))))
+
+(ert-deftest ob-glsl-reexecution-replaces-the-canvas-result-line ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_src glsl :width 8 :height 6\n")
+    (insert "void main() { fragColor = vec4(1.0); }\n")
+    (insert "#+end_src\n")
+    (goto-char (point-min))
+    (org-babel-execute-src-block)
+    (let ((first-state (car ob-glsl--active-states)))
+      (goto-char (point-min))
+      (org-babel-execute-src-block)
+      (should (= (length ob-glsl--active-states) 1))
+      (should-not (memq first-state ob-glsl--active-states))
+      (should (= (how-many (regexp-quote ob-glsl--result-token)
+                           (point-min) (point-max))
+                 1))
+      (should (string-match-p
+               (concat "^: " (regexp-quote ob-glsl--result-token) "$")
+               (buffer-string))))))
+
+(ert-deftest ob-glsl-keeps-results-for-different-blocks-independent ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_src glsl :width 8 :height 6\n")
+    (insert "void main() { fragColor = vec4(1.0, 0.0, 0.0, 1.0); }\n")
+    (insert "#+end_src\n\n")
+    (insert "#+begin_src glsl :width 8 :height 6\n")
+    (insert "void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }\n")
+    (insert "#+end_src\n")
+    (goto-char (point-min))
+    (org-babel-execute-src-block)
+    (let ((first-state (car ob-glsl--active-states)))
+      (re-search-forward "^#\\+begin_src glsl" nil nil 2)
+      (goto-char (match-beginning 0))
+      (org-babel-execute-src-block)
+      (should (= (length ob-glsl--active-states) 2))
+      (goto-char (point-min))
+      (org-babel-remove-result)
+      (should (= (length ob-glsl--active-states) 1))
+      (should-not (memq first-state ob-glsl--active-states)))))
+
+(provide 'ob-glsl-tests)
+
+;;; ob-glsl-tests.el ends here

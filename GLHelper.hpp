@@ -30,6 +30,8 @@ public:
         _handle = other._handle;
         other._handle = 0;
     }
+    Shader(const Shader&) = delete;
+    Shader& operator=(const Shader&) = delete;
     virtual ~Shader() {
         if (_handle) {
             glDeleteShader(_handle);
@@ -51,20 +53,21 @@ public:
         GLint isLinked = 0;
         glGetProgramiv(_handle, GL_LINK_STATUS, &isLinked);
         if(!isLinked) {
-            auto errCode = glGetError();
-            GLint maxLength;
+            GLint maxLength = 0;
             glGetProgramiv(_handle, GL_INFO_LOG_LENGTH, &maxLength);
-            std::vector<GLchar> infoLog(maxLength);
-            glGetProgramInfoLog(_handle, maxLength, &maxLength, &infoLog[0]);
-            throw std::runtime_error(std::string("failed to link program: ") +
-                                     std::to_string(static_cast<int>(errCode)) +
-                                     reinterpret_cast<const char*>(infoLog.data()));
+            std::string infoLog(static_cast<size_t>(maxLength > 0 ? maxLength : 1), '\0');
+            glGetProgramInfoLog(_handle, maxLength, nullptr, infoLog.data());
+            glDeleteProgram(_handle);
+            _handle = 0;
+            throw std::runtime_error("failed to link program: " + infoLog);
         }
     }
     RenderProgram(RenderProgram&& other) noexcept {
         _handle = other._handle;
         other._handle = 0;
     }
+    RenderProgram(const RenderProgram&) = delete;
+    RenderProgram& operator=(const RenderProgram&) = delete;
     virtual ~RenderProgram()
     {
         if (_handle)
@@ -90,6 +93,8 @@ public:
         _handle = other._handle;
         other._handle = 0;
     }
+    VertexArray(const VertexArray&) = delete;
+    VertexArray& operator=(const VertexArray&) = delete;
     virtual ~VertexArray() {
         if (_handle) {
             glDeleteVertexArrays(1, &_handle);
@@ -115,6 +120,8 @@ public:
         _handle = other._handle;
         other._handle = 0;
     }
+    RenderBuffer(const RenderBuffer&) = delete;
+    RenderBuffer& operator=(const RenderBuffer&) = delete;
     void bind() {
         glBindRenderbuffer(GL_RENDERBUFFER, _handle);
     }
@@ -134,8 +141,10 @@ public:
         _handle = other._handle;
         other._handle = 0;
     }
-    void bind() {
-        glBindFramebuffer(GL_FRAMEBUFFER, _handle);
+    FrameBuffer(const FrameBuffer&) = delete;
+    FrameBuffer& operator=(const FrameBuffer&) = delete;
+    void bind(GLenum target = GL_FRAMEBUFFER) const {
+        glBindFramebuffer(target, _handle);
     }
     void renderBuffer(const RenderBuffer& rb) {
         glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb._handle);
@@ -143,4 +152,5 @@ public:
     bool check() {
         return glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     }
+    GLuint handle() const { return _handle; }
 };
