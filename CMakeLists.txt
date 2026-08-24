@@ -5,7 +5,12 @@ set(CMAKE_CXX_STANDARD 17)
 
 find_package(SDL2 REQUIRED)
 find_library(SDL2_IMAGE_LIB SDL2_image)
-find_library(GLBINDING_LIB glbinding)
+if(APPLE)
+  find_package(glbinding CONFIG REQUIRED)
+  set(GLBINDING_LIB glbinding::glbinding)
+else()
+  find_library(GLBINDING_LIB glbinding)
+endif()
 find_path(EMACS_INCLUDE_DIR emacs-module.h
   HINTS
     "$ENV{EMACS_ROOT}/include"

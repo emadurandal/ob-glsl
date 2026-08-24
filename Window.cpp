@@ -1,5 +1,6 @@
 #include "Window.hpp"
 #include <SDL2/SDL.h>
+#include <string>
 #include <stdexcept>
 
 static SDL_Window* win = nullptr;
